@@ -37,7 +37,7 @@ def main():
     torch.manual_seed(0)
 
     def make_env():
-        base_env = TransformedEnv(GymEnv('BipedalWalker-v3', device=device), StepCounter())
+        base_env = TransformedEnv(GymEnv('BipedalWalker-v3', device=device))
         env = TransformedEnv(
             base_env,
             Compose(
@@ -46,7 +46,8 @@ def main():
                 StepCounter(),
             ),
         )
-        env.transform[1].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)
+        # print(env.transform)
+        env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)
         return env
 
     num_envs = 6
