@@ -33,7 +33,7 @@ env = make_env()
 device = torch.device("cpu")
 
 frames_per_batch = 1000
-total_frames = 30_000 #testing purposes, this is nowhere near enough
+total_frames = 2_000_000 #testing purposes, this is nowhere near enough
 sub_batch_size = 64
 
 optim_steps = 10 #number of times to update the critic and actor networks
@@ -98,12 +98,6 @@ critic = TensorDictSequential(
     critic_module
 )
 
-#im not sure if this is neede
-target_critic = TensorDictSequential(
-    cat_module,
-    critic_module
-)
-
 collector = SyncDataCollector(
     env,
     exploration_module,
@@ -133,7 +127,6 @@ updater = SoftUpdate(loss,tau=polyak)
 
 logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
-#havent updated both networks ???? why not 
 for i, tensordict_data in enumerate(collector):
     #add to replay buffer
     current_frame = tensordict_data.numel()
@@ -176,3 +169,35 @@ for i, tensordict_data in enumerate(collector):
     pbar.update(tensordict_data.numel())
 
 print("Training complete")
+
+plt.figure(figsize=(10, 10))
+plt.subplot(2, 2, 1)
+plt.plot(logs["reward"])
+plt.title("training rewards (average)")
+plt.subplot(2, 2, 2)
+plt.plot(logs["step_count"])
+plt.title("Max step count (training)")
+plt.subplot(2, 2, 3)
+plt.plot(logs["eval reward (sum)"])
+plt.title("Return (test)")
+plt.subplot(2, 2, 4)
+plt.plot(logs["eval step_count"])
+plt.title("Max step count (test)")
+plt.show()
+
+path = "./ddpg"
+logger = CSVLogger(exp_name="ddpg", log_dir=path, video_format="mp4")
+video_recorder = VideoRecorder(logger, tag="video")
+
+base_env2 = TransformedEnv(GymEnv('BipedalWalker-v3',device=device,from_pixels=True,pixels_only=False), video_recorder)
+env2 = TransformedEnv(
+    base_env2,
+    Compose(
+        ObservationNorm(in_keys=["observation"]),
+        DoubleToFloat(),
+        StepCounter()
+    )
+)
+env2.transform[1].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)
+env2.rollout(max_steps=1_000_000, policy=policy_module)
+video_recorder.dump()
