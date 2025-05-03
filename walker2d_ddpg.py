@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from collections import defaultdict
 import torch 
 from torch.optim import Adam
 from tensordict.nn import TensorDictModule, TensorDictSequential
@@ -13,20 +14,6 @@ from torchrl.envs.utils import check_env_specs, ExplorationType, set_exploration
 from tqdm import tqdm
 
 torch.manual_seed(0)
-
-"""
-done:
-    - wrote environment
-    - wrote policy network
-    - write critic network (Q-function Network (target and normal))
-        - Critic network takes state,action combined
-    - Data collector
-    - Replay Buffer
-todo:
-    - Training
-"""
-
-
 
 def make_env():
     base_env = TransformedEnv(GymEnv('BipedalWalker-v3'))
@@ -46,7 +33,7 @@ env = make_env()
 device = torch.device("cpu")
 
 frames_per_batch = 1000
-total_frames = 10_000 #testing purposes, this is nowhere near enough
+total_frames = 30_000 #testing purposes, this is nowhere near enough
 sub_batch_size = 64
 
 optim_steps = 10 #number of times to update the critic and actor networks
@@ -144,7 +131,8 @@ value_optimizer = Adam(loss.value_network_params.flatten_keys().values(), lr=lr)
 
 updater = SoftUpdate(loss,tau=polyak)
 
-
+logs = defaultdict(list)
+pbar = tqdm(total=total_frames)
 #havent updated both networks ???? why not 
 for i, tensordict_data in enumerate(collector):
     #add to replay buffer
@@ -174,21 +162,17 @@ for i, tensordict_data in enumerate(collector):
         updater.step()
 
     exploration_module[-1].step(current_frame)
-
-        # for loss_name in ["loss_actor", "loss_value"]:
-            # loss_vals[loss_name].backward()
-            # loss_i = loss_vals[loss_name]
-            # optim
-
-
-    # loss_vals = loss(batch)
-    # loss_vals["loss"].backward()
-    # optim.step()
-    # optim.zero_grad()
-    # updater.step()
     
-    if i % 100 == 0:
-        print(f"Iteration {i}: Actor Loss: {loss_vals}")
-        print(f"Iteration {i}: batch: {batch}")
-        print(f"Iteration {i}: Action: {batch['action'].mean().item()}")
-    
+    if i % 10 == 0:
+        eval_rollout = env.rollout(1000,policy_module)
+        logs["reward"].append(eval_rollout["next","reward"].mean().item())
+        logs["eval reward (sum)"].append(
+            eval_rollout["next", "reward"].sum().item()
+        )
+        logs["eval step_count"].append(eval_rollout["step_count"].max().item())
+        eval_str = f"eval reward (sum): {logs['eval reward (sum)'][-1]: 4.4f} (init={logs['eval reward (sum)'][0]: 4.4f})"
+        pbar.set_description(", ".join([eval_str]))
+        del eval_rollout
+    pbar.update(tensordict_data.numel())
+
+print("Training complete")

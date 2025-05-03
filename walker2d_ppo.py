@@ -163,6 +163,7 @@ def main():
         cum_reward_str = (
             f"average reward={logs['reward'][-1]: 4.4f} (init={logs['reward'][0]: 4.4f})"
         )
+        
         logs["step_count"].append(tensordict_data["step_count"].max().item())
         stepcount_str = f"step count (max): {logs['step_count'][-1]}"
         logs["lr"].append(optim.param_groups[0]["lr"])
