@@ -33,7 +33,7 @@ def make_env():
     env = TransformedEnv(
         base_env,
         Compose(
-            ObservationNorm(),
+            ObservationNorm(in_keys=["observation"]),
             DoubleToFloat(),
             StepCounter()
         )
@@ -48,7 +48,9 @@ device = torch.device("cpu")
 frames_per_batch = 1000
 total_frames = 10_000 #testing purposes, this is nowhere near enough
 sub_batch_size = 64
-num_epochs = 10
+
+optim_steps = 10 #number of times to update the critic and actor networks
+
 memory_size = 1_000_000 #replay buffer size (DDPG is off-policy)
 
 num_cells = 256
@@ -62,8 +64,8 @@ polyak = 0.005 #soft update rate for target network
 
 
 policy = MLP(
-    in_features=env.observation_spec,
-    out_features=env.action_spec,
+    in_features=env.observation_spec["observation"].shape[-1],
+    out_features=env.action_spec.shape[-1],
     depth=3,
     num_cells=num_cells,
     activation_class=torch.nn.Tanh
@@ -93,14 +95,14 @@ cat_module = TensorDictModule(
 
 critic_module = TensorDictModule(
     MLP(
-        in_features=env.observation_spec + env.action_spec,
+        in_features=env.observation_spec["observation"].shape[-1] + env.action_spec.shape[-1],
         out_features=1,
         depth=3,
         num_cells=num_cells,
         activation_class=torch.nn.Tanh
     ),
     in_keys=["obs_act"],
-    out_keys=["q_value"]
+    out_keys=["state_action_value"]
 )
 
 #critic network 
@@ -128,15 +130,65 @@ collector = SyncDataCollector(
 replay_buffer = ReplayBuffer(
     storage=LazyTensorStorage(max_size=memory_size,),
     sampler=RandomSampler(),
-    device=device
 ) 
 
 loss = DDPGLoss(
     actor_network=policy_module,
-    value_network=critic_module,
-    device=device
+    value_network=critic,
 )
 
-optim = Adam(loss.parameters(), lr=lr)
-updater = SoftUpdate(loss,eps=0.99,tau=polyak)
+# optim = Adam(loss.parameters(), lr=lr)
 
+actor_optimizer = Adam(loss.actor_network_params.flatten_keys().values(), lr=lr)
+value_optimizer = Adam(loss.value_network_params.flatten_keys().values(), lr=lr)
+
+updater = SoftUpdate(loss,tau=polyak)
+
+
+#havent updated both networks ???? why not 
+for i, tensordict_data in enumerate(collector):
+    #add to replay buffer
+    current_frame = tensordict_data.numel()
+    replay_buffer.extend(tensordict_data)
+    # batch = replay_buffer.sample(batch_size=frames_per_batch)
+    for _ in range(optim_steps):
+        #sample from replay buffer
+        batch = replay_buffer.sample(batch_size=train_batch_size)
+        #compute the loss
+        loss_vals = loss(batch)
+
+        actor_loss = loss_vals["loss_actor"]
+        actor_loss.backward()
+        params_a = actor_optimizer.param_groups[0]["params"]
+        torch.nn.utils.clip_grad_norm_(params_a, max_grad_norm)
+        actor_optimizer.step()
+        actor_optimizer.zero_grad()
+
+        value_loss = loss_vals["loss_value"]
+        value_loss.backward()
+        params_l = value_optimizer.param_groups[0]["params"]
+        torch.nn.utils.clip_grad_norm_(params_l, max_grad_norm)
+        value_optimizer.step()
+        value_optimizer.zero_grad()
+
+        updater.step()
+
+    exploration_module[-1].step(current_frame)
+
+        # for loss_name in ["loss_actor", "loss_value"]:
+            # loss_vals[loss_name].backward()
+            # loss_i = loss_vals[loss_name]
+            # optim
+
+
+    # loss_vals = loss(batch)
+    # loss_vals["loss"].backward()
+    # optim.step()
+    # optim.zero_grad()
+    # updater.step()
+    
+    if i % 100 == 0:
+        print(f"Iteration {i}: Actor Loss: {loss_vals}")
+        print(f"Iteration {i}: batch: {batch}")
+        print(f"Iteration {i}: Action: {batch['action'].mean().item()}")
+    
